@@ -97,6 +97,9 @@
   .cta-btn.call { background: var(--green); color: white; }
   .cta-btn.directions { background: var(--white); color: var(--green); border: 1.5px solid var(--green); }
 
+  .map-wrap { width: 100%; height: 210px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); overflow: hidden; background: var(--surface); }
+  .map-wrap iframe { width: 100%; height: 100%; border: none; display: block; }
+
   .loading { display: none; align-items: center; gap: 8px; padding: 12px 16px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--border); }
   .loading.show { display: flex; }
   .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--green); border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
@@ -202,7 +205,7 @@ document.getElementById('searchInput').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSearch(); }
 });
 
-async function doSearch() {
+function doSearch() {
   const query = document.getElementById('searchInput').value.trim();
   if (!query) return;
   document.getElementById('chipArea').style.display = 'none';
@@ -212,67 +215,200 @@ async function doSearch() {
   document.getElementById('resultsHeader').style.display = 'none';
   document.getElementById('resultsList').innerHTML = '';
 
-  try {
-    const criteria = await extractCriteria(query);
-    const results = filterProviders(criteria);
-    currentResults = results;
-    showCriteria(criteria, query);
-    renderResults(results);
-  } catch(e) {
-    showError();
+  // Small timeout so the loading spinner paints before the filter runs
+  setTimeout(() => {
+    try {
+      const criteria = extractCriteria(query);
+      const results  = filterProviders(criteria);
+      currentResults = results;
+      showCriteria(criteria, query);
+      renderResults(results);
+    } catch(e) {
+      showError();
+    }
+    showLoading(false);
+  }, 30);
+}
+
+// ─── Client-side keyword parser (replaces Claude API call) ─────────────────
+// No API key, no CORS issues, works on GitHub Pages, fully offline.
+function extractCriteria(query) {
+  const q = query.toLowerCase().trim();
+  const c = {};
+
+  // ── Provider type ──────────────────────────────────────────────────────────
+  const typeMap = [
+    // Mental health (check before generic "counseling")
+    [/psychiatrist|psychiatry/,                        'Psychiatry'],
+    [/psychologist|psychology/,                        'Psychology'],
+    [/therapist|counselor|mental health|behavioral health/, 'Counseling'],
+    [/social work/,                                    'Licensed Clinical Social Worker'],
+    [/licensed mental health/,                         'Licensed Mental Health Counselor'],
+    [/marriage.{0,10}family/,                          'Licensed Marriage & Family Therapist'],
+    [/substance|addiction|drug counselor|alcohol counselor/, 'Licensed Alcohol & Drug Counselor'],
+    // Primary / general
+    [/primary care|pcp|general (doctor|physician|practice)/, 'Primary Care'],
+    [/family (medicine|doctor|physician|practice)/,    'Family Medicine'],
+    [/internal medicine|internist/,                    'Internal Medicine'],
+    [/hospitalist/,                                    'Hospitalist'],
+    // Cardiology
+    [/cardiologist|cardiology|heart (doctor|specialist)/, 'Cardiology'],
+    [/interventional cardio/,                          'Interventional Cardiology'],
+    // OB/GYN
+    [/ob[\-\s]?gyn|obstetric|gynecol/,                'Obstetrics & Gynecology'],
+    [/midwife|midwifery/,                              'Nurse Midwife'],
+    // Pediatrics
+    [/pediatric(ian)?(?!\s+(cardio|neuro|gastro|onco|nephro|pulmon|surg|urol|endo|infect|allerg|hema|ortho|oto|emer|crit|diet))/,
+                                                       'Primary Care'],
+    [/pediatric cardio/,                               'Pediatric Cardiology'],
+    [/pediatric neuro/,                                'Pediatric Neurology'],
+    [/pediatric gastro/,                               'Pediatric Gastroenterology'],
+    [/pediatric onco/,                                 'Pediatric Hematology / Oncology'],
+    [/pediatric surg/,                                 'Pediatric Surgery'],
+    [/pediatric endo/,                                 'Pediatric Endocrinology'],
+    // Ortho / Musculoskeletal
+    [/orthopedic|orthopaedic|ortho (surgeon|surgery)/,'Orthopedic Surgery'],
+    [/spine (surgeon|surgery|specialist)/,             'Orthopaedic Surgery of the Spine'],
+    [/hand (surgeon|surgery)/,                         'Orthopedic Hand Surgery'],
+    [/foot.{0,6}ankle/,                                'Orthopedic Foot and Ankle Surgery'],
+    [/sports medicine/,                                'Orthopedic Sports Medicine'],
+    // Neurology
+    [/neurologist|neurology/,                          'Neurology'],
+    [/neurosurgeon|neurosurgery/,                      'Neurosurgery'],
+    [/neuropsych/,                                     'Neuropsychology'],
+    // GI
+    [/gastroenterolog/,                                'Gastroenterology'],
+    [/hepatolog/,                                      'Hepatology'],
+    [/colon|rectal/,                                   'Colon & Rectal Surgery'],
+    // Oncology
+    [/oncolog|cancer (doctor|specialist)/,             'Hematology / Oncology'],
+    [/radiation oncol/,                                'Radiation Oncology'],
+    [/medical oncol/,                                  'Medical Oncology'],
+    // Pulmonary / Sleep
+    [/pulmonol|lung (doctor|specialist)/,              'Pulmonary Medicine'],
+    [/sleep (medicine|specialist|doctor)/,             'Sleep Medicine'],
+    // Endocrine
+    [/endocrinol|diabetes (doctor|specialist)/,        'Endocrinology'],
+    [/reproductive endo/,                              'Reproductive Endocrinology'],
+    // Nephrology / Urology
+    [/nephrolog|kidney (doctor|specialist)/,           'Nephrology'],
+    [/urolog/,                                         'Urology'],
+    // Rheumatology / Allergy
+    [/rheumatolog|arthritis (doctor|specialist)/,      'Rheumatology'],
+    [/allerg|immunolog/,                               'Allergy & Immunology'],
+    // Derm / Skin
+    [/dermatolog|skin (doctor|specialist)/,            'Dermatology'],
+    // Eyes / Ears
+    [/ophthalmolog|eye (doctor|surgeon|specialist)/,   'Ophthalmology'],
+    [/optometr/,                                       'Optometry'],
+    [/audiolog|hearing (doctor|specialist)/,           'Audiology'],
+    [/otolaryng|ear.nose.throat|ent\b/,               'Pediatric Otolaryngology'],
+    // Surgery
+    [/general surg/,                                   'General Surgery'],
+    [/vascular surg/,                                  'Vascular Surgery'],
+    [/thoracic surg/,                                  'Thoracic Surgery'],
+    [/transplant surg/,                                'Transplant Surgery'],
+    [/oral surg/,                                      'Oral Surgery'],
+    [/plastic surg/,                                   'Surgery'],
+    [/\bsurgeon\b|\bsurgery\b/,                        'Surgery'],
+    // Rehab / Therapy
+    [/physical therap|physiotherap|\bpt\b/,            'Physical Therapy'],
+    [/occupational therap|\bot\b/,                     'Occupational Therapy'],
+    [/speech.language|speech therap|slp\b/,            'Speech-Language Pathology'],
+    [/physical medicine|rehab (medicine|specialist)/,  'Physical Medicine & Rehabilitation'],
+    // Pain / Palliative
+    [/pain (management|specialist|doctor)/,            'Pain Management'],
+    [/palliative|hospice/,                             'Hospice & Palliative Care'],
+    [/interventional pain/,                            'Interventional Pain Management'],
+    // Other
+    [/chiropract/,                                     'Chiropractor'],
+    [/podiatr|foot (doctor|specialist)/,               'Podiatry'],
+    [/dentist|dental/,                                 'Dentist'],
+    [/acupunct/,                                       'Acupuncturist'],
+    [/dietitian|nutritionist|nutrition/,               'Dietitian'],
+    [/pharmacy|pharmacist/,                            'Pharmacy'],
+    [/wound care/,                                     'Wound Care'],
+    [/infectious disease|hiv specialist/,              'Infectious Disease'],
+    [/geriatric|elderly (care|doctor)/,                'Geriatric Medicine'],
+    [/hematolog/,                                      'Hematology / Oncology'],
+    [/nurse practitioner|\bnp\b/,                      'Nurse Practitioner'],
+    [/physician assistant|\bpa\b/,                     'Physician Assistant'],
+    [/case manag/,                                     'Case Management'],
+    [/home health/,                                    'Home Health'],
+  ];
+  for (const [pattern, type] of typeMap) {
+    if (pattern.test(q)) { c.provider_type = type; break; }
   }
-  showLoading(false);
-}
 
-async function extractCriteria(query) {
-  const systemPrompt = `You are a search assistant for the NHPRI provider directory. Extract search criteria from a natural language query and return ONLY a JSON object, no preamble or explanation.
+  // ── City ───────────────────────────────────────────────────────────────────
+  const cities = [
+    'providence','warwick','cranston','pawtucket','east providence',
+    'woonsocket','coventry','north providence','cumberland','west warwick',
+    'north kingstown','south kingstown','johnston','newport','east greenwich',
+    'westerly','north attleboro','smithfield','lincoln','bristol',
+    'burrillville','west greenwich','portsmouth','barrington','tiverton',
+    'middletown','north smithfield','scituate','glocester','foster',
+    'hopkinton','richmond','exeter','little compton','jamestown','narragansett',
+    'charlestown','new shoreham','central falls','valley falls'
+  ];
+  for (const city of cities) {
+    if (q.includes(city)) { c.city = city.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' '); break; }
+  }
 
-JSON schema (all fields optional, use null if not specified):
-{
-  "provider_type": string or null,  // e.g. "cardiologist", "primary care", "therapist", "OB-GYN", "pediatrician"
-  "city": string or null,           // city name in Rhode Island
-  "zip": string or null,            // 5-digit zip
-  "gender": "M" or "F" or null,     // M=male, F=female
-  "language": string or null,       // e.g. "Spanish", "Portuguese", "Chinese"
-  "accepting_new_patients": true or null,  // only set true if user wants this
-  "telehealth": true or null,       // only set true if user wants this
-  "hospital": string or null,       // hospital affiliation name fragment
-  "skills": string or null,         // special skills/training keyword
-  "keywords": string or null        // any other search terms (name fragment, etc.)
-}
+  // ── ZIP code ───────────────────────────────────────────────────────────────
+  const zipMatch = q.match(/\b(0[23]\d{3})\b/);
+  if (zipMatch) c.zip = zipMatch[1];
 
-Map specialty terms to provider_type as found in the directory:
-- "therapist", "counselor", "mental health" → "Counseling" or "Licensed Mental Health Counselor" or "Psychology" or "Psychiatry"
-- "primary care", "PCP", "general doctor" → "Primary Care" or "Family Medicine" or "Internal Medicine"
-- "OB", "OB-GYN", "obstetrician", "gynecologist" → "Obstetrics & Gynecology"
-- "cardiologist", "heart" → "Cardiology"
-- "pediatrician", "kids doctor", "children" → "Family Medicine" or "Pediatric"
-- "physical therapy", "PT" → "Physical Therapy"
-- "eye doctor", "optometrist" → "Optometry" or "Ophthalmology"
-- "chiropractor" → "Chiropractor"
-- "psychiatrist" → "Psychiatry"
-- "psychologist" → "Psychology"
-- "neurologist" → "Neurology"
-- "dermatologist" → "Dermatology"
-- "surgeon" → "Surgery"
-- "dentist" → "Dentist"
+  // ── Gender ─────────────────────────────────────────────────────────────────
+  if (/\bfemale\b|\bwoman\b|\bwomen\b/.test(q))      c.gender = 'F';
+  else if (/\bmale\b|\bman\b|\bmen\b/.test(q))        c.gender = 'M';
 
-Return ONLY the JSON object.`;
+  // ── Language ───────────────────────────────────────────────────────────────
+  const langMap = [
+    [/spanish/,    'Spanish'],   [/portugu/,   'Portuguese'],
+    [/french/,     'French'],    [/chinese|mandarin|cantonese/, 'Chinese'],
+    [/arabic/,     'Arabic'],    [/italian/,   'Italian'],
+    [/russian/,    'Russian'],   [/tagalog|filipino/, 'Tagalog'],
+    [/haitian|creole/, 'Haitian Creole'], [/vietnamese/, 'Vietnamese'],
+    [/korean/,     'Korean'],    [/japanese/,  'Japanese'],
+    [/polish/,     'Polish'],    [/german/,    'German'],
+    [/hindi/,      'Hindi'],     [/gujarati/,  'Gujarati'],
+    [/cambodian|khmer/, 'Cambodian'], [/laotian/, 'Laotian'],
+  ];
+  for (const [pattern, lang] of langMap) {
+    if (pattern.test(q)) { c.language = lang; break; }
+  }
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 400,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: query }]
-    })
-  });
-  const data = await response.json();
-  const text = data.content[0].text.trim();
-  const cleaned = text.replace(/^```json\n?|^```\n?|```$/gm, '').trim();
-  return JSON.parse(cleaned);
+  // ── Boolean flags ──────────────────────────────────────────────────────────
+  if (/accepting|new patient|taking (new|patients)/.test(q)) c.accepting_new_patients = true;
+  if (/telehealth|virtual|online (visit|appointment|care)/.test(q)) c.telehealth = true;
+
+  // ── Hospital affiliation ───────────────────────────────────────────────────
+  const hospMap = [
+    [/lifespan/,         'Lifespan'],
+    [/hasbro/,           'Hasbro'],
+    [/rhode island hospital|ri hospital/, 'Rhode Island Hospital'],
+    [/miriam/,           'Miriam'],
+    [/care new england|cne/, 'Care New England'],
+    [/women.{0,10}infants?/, "Women & Infants"],
+    [/kent (county|hospital)/, 'Kent'],
+    [/south county/,     'South County'],
+    [/newport (hospital|health)/, 'Newport'],
+    [/landmark/,         'Landmark'],
+    [/fatima/,           'Fatima'],
+  ];
+  for (const [pattern, hosp] of hospMap) {
+    if (pattern.test(q)) { c.hospital = hosp; break; }
+  }
+
+  // ── Keywords fallback ──────────────────────────────────────────────────────
+  // If we couldn't extract a structured type, treat the whole query as keyword search
+  if (!c.provider_type && !c.city && !c.zip && !c.language && !c.gender
+      && !c.accepting_new_patients && !c.telehealth && !c.hospital) {
+    c.keywords = query;
+  }
+
+  return c;
 }
 
 function filterProviders(c) {
@@ -443,12 +579,36 @@ function renderDetail(p) {
   const telehealthVal = p.telehealth === true ? '<span class="dg-val yes">✓ Yes</span>' : '<span class="dg-val no">No / Unknown</span>';
   const genderMap = { M: 'Male', F: 'Female' };
 
+  // Full address string for map + directions
+  const fullAddress = [p.address, p.city, 'RI', p.zip].filter(Boolean).join(', ');
+
+  // Google Maps embed — no API key needed for the place search embed
+  const mapSrc = p.address
+    ? 'https://maps.google.com/maps?q=' + encodeURIComponent(fullAddress) + '&output=embed&z=15'
+    : null;
+
+  // Google Maps directions URL — opens native app on mobile, web on desktop
+  const directionsUrl = p.address
+    ? 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(fullAddress)
+    : null;
+
+  // Clean phone for tel: — strip everything except digits and +
+  const rawPhone = p.phone ? p.phone.replace(/[^\d+]/g, '') : null;
+  const telHref  = rawPhone ? 'tel:+1' + rawPhone : null;
+
   panel.innerHTML = '<div class="detail-card">' +
+
     '<div class="detail-header">' +
       '<div class="dh-name">' + esc(p.name) + '</div>' +
       (p.credential ? '<div class="dh-cred">' + esc(p.credential) + '</div>' : '') +
       '<div class="dh-type">' + esc(p.provider_type) + '</div>' +
     '</div>' +
+
+    // ── Map embed ──────────────────────────────────────────────
+    (mapSrc
+      ? '<div class="map-wrap"><iframe src="' + mapSrc + '" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Map showing location of ' + esc(p.name) + '" aria-label="Map"></iframe></div>'
+      : '') +
+
     '<div class="detail-body">' +
 
       '<div class="detail-section">' +
@@ -456,7 +616,12 @@ function renderDetail(p) {
         '<div class="detail-grid">' +
           '<div class="dg-item"><div class="dg-label">Address</div><div class="dg-val">' + esc(p.address || '—') + '</div></div>' +
           '<div class="dg-item"><div class="dg-label">City</div><div class="dg-val">' + esc(p.city || '—') + (p.zip ? ', RI ' + p.zip : '') + '</div></div>' +
-          '<div class="dg-item"><div class="dg-label">Phone</div><div class="dg-val">' + (p.phone ? '<a href="tel:' + p.phone + '" style="color:var(--green);text-decoration:none">' + esc(p.phone) + '</a>' : '—') + '</div></div>' +
+          // Phone shown inline AND as CTA — both use tel: so mobile dials directly
+          '<div class="dg-item"><div class="dg-label">Phone</div><div class="dg-val">' +
+            (telHref
+              ? '<a href="' + telHref + '" style="color:var(--green);text-decoration:none;font-weight:600">' + esc(p.phone) + '</a>'
+              : '—') +
+          '</div></div>' +
         '</div>' +
       '</div>' +
 
@@ -477,9 +642,20 @@ function renderDetail(p) {
 
     '</div>' +
 
+    // ── CTA buttons ────────────────────────────────────────────
     '<div class="cta-row">' +
-      (p.phone ? '<a href="tel:' + p.phone + '" class="cta-btn call"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13.6 19.79 19.79 0 0 1 1.61 5a2 2 0 0 1 1.95-2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 10.09a16 16 0 0 0 6 6l.92-.92a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Call ' + esc(p.phone) + '</a>' : '') +
-      (p.address ? '<a href="https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent((p.address || '') + ', ' + (p.city || '') + ', RI ' + (p.zip || '')) + '" target="_blank" rel="noopener" class="cta-btn directions"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg> Get Directions</a>' : '') +
+      (telHref
+        ? '<a href="' + telHref + '" class="cta-btn call">' +
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13.6 19.79 19.79 0 0 1 1.61 5a2 2 0 0 1 1.95-2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 10.09a16 16 0 0 0 6 6l.92-.92a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>' +
+            ' Call ' + esc(p.phone) +
+          '</a>'
+        : '') +
+      (directionsUrl
+        ? '<a href="' + directionsUrl + '" target="_blank" rel="noopener noreferrer" class="cta-btn directions">' +
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>' +
+            ' Get Directions' +
+          '</a>'
+        : '') +
     '</div>' +
 
     '</div>';
